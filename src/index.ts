@@ -746,10 +746,13 @@ async function sendSupportHome(env: Env, chatID: number, locale: Locale, runtime
   if (base) rows.push([{ text: copy.support, web_app: { url: `${base}/mini?tab=care` } }]);
   rows.push([{ text: copy.liveSupport, callback_data: "home:live_support" }]);
   rows.push([{ text: copy.website, url: "https://iumrah.app" }]);
-  await sendMessage(
+  await sendEmbeddedPhotoMessage(
     env,
     chatID,
-    `<b>${escapeHtml(copy.supportTitle)}</b>\n\n${escapeHtml(copy.supportBody)}`,
+    SUPPORT_ASSETS.care,
+    `<b>${escapeHtml(copy.supportTitle)}</b>
+
+${escapeHtml(copy.supportBody)}`,
     { inline_keyboard: rows },
   );
 }
@@ -1270,9 +1273,10 @@ async function showBookings(env: Env, chatId: number, userID: number, runtimeBas
   const locale = preferredLocale ?? normalizeLocale(rows[0]?.language || 'ru');
   const strings = textFor(locale);
   if (!rows.length) {
-    await sendMessage(
+    await sendEmbeddedPhotoMessage(
       env,
       chatId,
+      SUPPORT_ASSETS.booking_not_linked,
       `<b>${escapeHtml(strings.generic.bookingNotLinkedTitle)}</b>
 
 ${escapeHtml(strings.generic.bookingNotLinkedBody)}`,
@@ -1315,14 +1319,15 @@ ${escapeHtml(strings.generic.bookingNotLinkedBody)}`,
     return;
   }
 
-  await sendMessage(
-    env,
-    chatId,
-    `<b>${escapeHtml(strings.generic.bookingNotLinkedTitle)}</b>
+  await sendEmbeddedPhotoMessage(
+      env,
+      chatId,
+      SUPPORT_ASSETS.booking_not_linked,
+      `<b>${escapeHtml(strings.generic.bookingNotLinkedTitle)}</b>
 
 ${escapeHtml(strings.generic.bookingNotLinkedBody)}`,
-    persistentReplyKeyboard(env, locale, runtimeBaseURL),
-  );
+      persistentReplyKeyboard(env, locale, runtimeBaseURL),
+    );
 }
 
 async function refreshBooking(env: Env, callback: TelegramCallbackQuery, bookingID: string, runtimeBaseURL?: string): Promise<void> {
@@ -2034,7 +2039,7 @@ export default {
     } catch { /* The health endpoint can still respond before a first migration in local development. */ }
 
     if (request.method === "GET" && url.pathname === "/health") {
-      return json({ ok: true, service: "iumrah-telegram-bot", version: "1.7.5", apiOrigin: serverOrigin(env), directServer: true, packageBinding: Boolean(env.IUMRAH_PACKAGE_API), iumrahWebReadFallback: Boolean(env.IUMRAH_WEB) });
+      return json({ ok: true, service: "iumrah-telegram-bot", version: "1.7.6", apiOrigin: serverOrigin(env), directServer: true, packageBinding: Boolean(env.IUMRAH_PACKAGE_API), iumrahWebReadFallback: Boolean(env.IUMRAH_WEB) });
     }
     if (request.method === "GET" && /^\/status-image\/[a-z_]+\.webp$/.test(url.pathname)) {
       const key = url.pathname.split("/").pop()?.replace(/\.webp$/, "") || "";
