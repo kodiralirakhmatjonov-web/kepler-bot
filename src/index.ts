@@ -689,11 +689,16 @@ function persistentReplyKeyboard(env: Env, locale: Locale, runtimeBaseURL?: stri
 async function setMiniAppMenuButton(env: Env, chatID: number, locale: Locale, runtimeBaseURL?: string): Promise<void> {
   const base = miniBaseURL(env, runtimeBaseURL);
   if (!base) return;
+  const menuButton = { type: "web_app", text: botUX(locale).openMini, web_app: { url: `${base}/mini` } };
   try {
+    // Per-chat Web App button.
     await telegramCall(env, "setChatMenuButton", {
       chat_id: chatID,
-      menu_button: { type: "web_app", text: botUX(locale).openMini, web_app: { url: `${base}/mini` } },
+      menu_button: menuButton,
     });
+    // Also keep the bot-wide default Web App menu configured. Telegram clients use
+    // this default when rendering the bot's Open/Menu entry outside an active chat.
+    await telegramCall(env, "setChatMenuButton", { menu_button: menuButton });
   } catch (error) {
     console.error("setChatMenuButton failed", chatID, error);
   }
@@ -2039,7 +2044,7 @@ export default {
     } catch { /* The health endpoint can still respond before a first migration in local development. */ }
 
     if (request.method === "GET" && url.pathname === "/health") {
-      return json({ ok: true, service: "iumrah-telegram-bot", version: "1.7.6", apiOrigin: serverOrigin(env), directServer: true, packageBinding: Boolean(env.IUMRAH_PACKAGE_API), iumrahWebReadFallback: Boolean(env.IUMRAH_WEB) });
+      return json({ ok: true, service: "iumrah-telegram-bot", version: "1.7.7", apiOrigin: serverOrigin(env), directServer: true, packageBinding: Boolean(env.IUMRAH_PACKAGE_API), iumrahWebReadFallback: Boolean(env.IUMRAH_WEB) });
     }
     if (request.method === "GET" && /^\/status-image\/[a-z_]+\.webp$/.test(url.pathname)) {
       const key = url.pathname.split("/").pop()?.replace(/\.webp$/, "") || "";
