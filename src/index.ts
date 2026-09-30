@@ -1725,8 +1725,12 @@ async function miniBootstrap(request: Request, env: Env): Promise<Response> {
   const user = await validateTelegramInitData(env, clean(body.initData, 8192));
   if (!user) return json({ error: "TELEGRAM_AUTH_FAILED" }, 401);
   const rows = await linkedRowsForUser(env, user.id);
-  if (!rows.length) return json({ error: "BOOKING_NOT_LINKED" }, 404);
   const locale = normalizeLocale(rows[0]?.language || user.language_code || "ru");
+  // Opening the Mini App must never collapse into a raw API error when the
+  // Telegram account has not linked a booking yet. Return an authenticated
+  // empty shell so Booking / Care / Help remain usable and the UI can offer
+  // the canonical connect-booking flow.
+  if (!rows.length) return json({ ok: true, locale, bookings: [], careProfile: null, emptyReason: "BOOKING_NOT_LINKED" });
   const bundles: any[] = [];
   for (const row of rows.slice(0, 10)) {
     const bundle = await miniBookingBundle(env, row);
@@ -2044,7 +2048,7 @@ export default {
     } catch { /* The health endpoint can still respond before a first migration in local development. */ }
 
     if (request.method === "GET" && url.pathname === "/health") {
-      return json({ ok: true, service: "iumrah-telegram-bot", version: "1.7.7", apiOrigin: serverOrigin(env), directServer: true, packageBinding: Boolean(env.IUMRAH_PACKAGE_API), iumrahWebReadFallback: Boolean(env.IUMRAH_WEB) });
+      return json({ ok: true, service: "iumrah-telegram-bot", version: "1.7.8", apiOrigin: serverOrigin(env), directServer: true, packageBinding: Boolean(env.IUMRAH_PACKAGE_API), iumrahWebReadFallback: Boolean(env.IUMRAH_WEB) });
     }
     if (request.method === "GET" && /^\/status-image\/[a-z_]+\.webp$/.test(url.pathname)) {
       const key = url.pathname.split("/").pop()?.replace(/\.webp$/, "") || "";
