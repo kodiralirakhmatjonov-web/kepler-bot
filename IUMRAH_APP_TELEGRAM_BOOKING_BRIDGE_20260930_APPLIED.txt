@@ -1,0 +1,9 @@
+iumrah mobile app ↔ Telegram bot booking bridge — 2026-09-30
+
+- /internal/link-token accepts a booking token or signed-in iumrah account token
+- encrypted stored credentials are prefixed as booking:/account:
+- pre-existing linked bookings with raw booking tokens stay compatible
+- every downstream booking request emits the matching authorization header
+- status sync, cron notifications, mini app, Care photo/attachment flows support both credential types
+- account-linked bookings keep a status-capable Mini App fallback even when the legacy web booking snapshot is unavailable
+- no D1 migration is required

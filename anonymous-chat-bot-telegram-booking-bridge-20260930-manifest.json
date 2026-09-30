@@ -1,0 +1,11 @@
+{
+  "name": "iumrah mobile app Telegram booking bridge",
+  "date": "2026-09-30",
+  "worker": "anonymous-chat-bot",
+  "database_migration_required": false,
+  "backward_compatible_existing_links": true,
+  "files": [
+    "IUMRAH_APP_TELEGRAM_BOOKING_BRIDGE_20260930_APPLIED.txt",
+    "src/index.ts"
+  ]
+}

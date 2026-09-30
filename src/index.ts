@@ -866,8 +866,24 @@ function parseWebBookingPayload(value: unknown): ClientTripResponse | null {
   return { ok: true, trip, statusHistory: [] };
 }
 
-async function fetchTrip(env: Env, bookingID: string, bookingToken: string): Promise<ClientTripResponse> {
-  const headers = { accept: "application/json", "x-booking-token": bookingToken };
+function bookingCredentialHeaders(credential: string, initial?: HeadersInit): Headers {
+  const headers = new Headers(initial || {});
+  const raw = credential.trim();
+  if (raw.startsWith("account:")) {
+    const token = raw.slice("account:".length).trim();
+    if (token) headers.set("authorization", `Bearer ${token}`);
+  } else if (raw.startsWith("booking:")) {
+    const token = raw.slice("booking:".length).trim();
+    if (token) headers.set("x-booking-token", token);
+  } else if (raw) {
+    // Backward compatibility for rows linked before credential prefixes existed.
+    headers.set("x-booking-token", raw);
+  }
+  return headers;
+}
+
+async function fetchTrip(env: Env, bookingID: string, bookingCredential: string): Promise<ClientTripResponse> {
+  const headers = bookingCredentialHeaders(bookingCredential, { accept: "application/json" });
 
   // Canonical operational status comes directly from the iumrah server.
   try {
@@ -888,7 +904,7 @@ async function fetchTrip(env: Env, bookingID: string, bookingToken: string): Pro
 
   // Compatibility read fallback. No website update is required; this only uses
   // the already-deployed GET route if the operational trip service is unavailable.
-  const fallback = await fetchExistingWebRead(env, `/api/bookings/${encodeURIComponent(bookingID)}`, bookingToken);
+  const fallback = await fetchExistingWebRead(env, `/api/bookings/${encodeURIComponent(bookingID)}`, bookingCredential);
   if (fallback.status === 200) {
     const payload = parseWebBookingPayload(fallback.body);
     if (payload && payload.trip.bookingID === bookingID) return payload;
@@ -1157,14 +1173,25 @@ function requireBridge(request: Request, env: Env): boolean {
 }
 
 async function createLinkToken(request: Request, env: Env): Promise<Response> {
-  // The existing high-entropy booking token is the authorization proof for linking.
-  // The Worker validates it against the canonical iUmrah trip API before creating a one-time Telegram link.
+  // Store one encrypted booking-scoped credential. New app links may use either
+  // the original booking proof or the signed-in iumrah account session. The
+  // credential is validated against the canonical trip API when Telegram claims it.
   let body: Record<string, unknown>;
   try { body = (await request.json()) as Record<string, unknown>; } catch { return json({ error: "INVALID_REQUEST" }, 400); }
   const bookingID = clean(body.bookingId ?? body.bookingID, 64);
   const bookingToken = clean(body.bookingToken ?? body.accessToken, 256);
+  const accountToken = clean(body.accountToken ?? body.bearerToken, 512);
   const language = normalizeLocale(clean(body.language, 16) || "ru");
-  if (!validBookingID(bookingID) || bookingToken.length < 24) return json({ error: "INVALID_BOOKING" }, 400);
+  if (!validBookingID(bookingID)) return json({ error: "INVALID_BOOKING" }, 400);
+
+  let bookingCredential = "";
+  if (bookingToken.length >= 24 && bookingToken.length <= 128) {
+    bookingCredential = `booking:${bookingToken}`;
+  } else if (accountToken.length >= 24 && accountToken.length <= 256) {
+    bookingCredential = `account:${accountToken}`;
+  } else {
+    return json({ error: "INVALID_BOOKING" }, 400);
+  }
 
   // Do not call iumrah Web from this nested web -> bot request. The link is
   // only a short-lived claim ticket; the booking token is validated when the
@@ -1173,7 +1200,7 @@ async function createLinkToken(request: Request, env: Env): Promise<Response> {
 
   const raw = base64Url(crypto.getRandomValues(new Uint8Array(32)));
   const tokenHash = await sha256Hex(raw);
-  const encrypted = await encryptSecret(env, bookingToken);
+  const encrypted = await encryptSecret(env, bookingCredential);
   const createdAt = new Date().toISOString();
   const expiresAt = new Date(Date.now() + LINK_TTL_SECONDS * 1000).toISOString();
   await env.DB.prepare(
@@ -1625,10 +1652,9 @@ function serverOrigin(env: Env): string {
   return normalizeOrigin(env.IUMRAH_API_ORIGIN);
 }
 
-async function fetchServerJSON(env: Env, path: string, bookingToken: string, init?: RequestInit): Promise<{ status: number; body: any }> {
-  const headers = new Headers(init?.headers || {});
+async function fetchServerJSON(env: Env, path: string, bookingCredential: string, init?: RequestInit): Promise<{ status: number; body: any }> {
+  const headers = bookingCredentialHeaders(bookingCredential, init?.headers);
   headers.set("accept", "application/json");
-  if (bookingToken) headers.set("x-booking-token", bookingToken);
   if (init?.body && !headers.has("content-type")) headers.set("content-type", "application/json");
   try {
     const response = await fetch(`${serverOrigin(env)}${path}`, { ...init, headers, redirect: "manual" });
@@ -1641,10 +1667,9 @@ async function fetchServerJSON(env: Env, path: string, bookingToken: string, ini
   }
 }
 
-async function fetchPackageServerJSON(env: Env, path: string, bookingToken: string, init?: RequestInit): Promise<{ status: number; body: any }> {
-  const headers = new Headers(init?.headers || {});
+async function fetchPackageServerJSON(env: Env, path: string, bookingCredential: string, init?: RequestInit): Promise<{ status: number; body: any }> {
+  const headers = bookingCredentialHeaders(bookingCredential, init?.headers);
   headers.set("accept", "application/json");
-  if (bookingToken) headers.set("x-booking-token", bookingToken);
   if (init?.body && !headers.has("content-type")) headers.set("content-type", "application/json");
 
   if (env.IUMRAH_PACKAGE_API && typeof env.IUMRAH_PACKAGE_API.fetch === "function") {
@@ -1657,19 +1682,18 @@ async function fetchPackageServerJSON(env: Env, path: string, bookingToken: stri
       console.error("iumrah PackageEngine service binding failed; trying public server", path, error);
     }
   }
-  return fetchServerJSON(env, path, bookingToken, init);
+  return fetchServerJSON(env, path, bookingCredential, init);
 }
 
-async function fetchExistingWebRead(env: Env, path: string, bookingToken: string, init?: RequestInit): Promise<{ status: number; body: any }> {
+async function fetchExistingWebRead(env: Env, path: string, bookingCredential: string, init?: RequestInit): Promise<{ status: number; body: any }> {
   // Existing web read routes remain a compatibility fallback only. V7.5 does not
   // require any website code changes and all booking mutations go directly to
   // PackageEngine / Hotels backend routes.
   if (!env.IUMRAH_WEB || typeof env.IUMRAH_WEB.fetch !== "function") {
-    return fetchServerJSON(env, path, bookingToken, init);
+    return fetchServerJSON(env, path, bookingCredential, init);
   }
-  const headers = new Headers(init?.headers || {});
+  const headers = bookingCredentialHeaders(bookingCredential, init?.headers);
   headers.set("accept", "application/json");
-  if (bookingToken) headers.set("x-booking-token", bookingToken);
   if (init?.body && !headers.has("content-type")) headers.set("content-type", "application/json");
   try {
     const response = await env.IUMRAH_WEB.fetch(new Request(`https://iumrah-web.internal${path}`, { ...init, headers, redirect: "manual" }));
@@ -1677,24 +1701,37 @@ async function fetchExistingWebRead(env: Env, path: string, bookingToken: string
     try { body = await response.json(); } catch { body = null; }
     return { status: response.status, body };
   } catch {
-    return fetchServerJSON(env, path, bookingToken, init);
+    return fetchServerJSON(env, path, bookingCredential, init);
   }
 }
 
 async function miniBookingBundle(env: Env, row: LinkedBookingRow): Promise<any | null> {
   try {
-    const token = await decryptSecret(env, row.booking_token_ciphertext, row.booking_token_iv);
-    const primary = await fetchExistingWebRead(env, `/api/bookings/${encodeURIComponent(row.booking_id)}`, token);
-    if (primary.status !== 200 || !primary.body?.booking) return null;
-    const payload = await fetchTrip(env, row.booking_id, token);
+    const credential = await decryptSecret(env, row.booking_token_ciphertext, row.booking_token_iv);
+    const payload = await fetchTrip(env, row.booking_id, credential);
+    const primary = await fetchExistingWebRead(env, `/api/bookings/${encodeURIComponent(row.booking_id)}`, credential);
+    const booking = primary.status === 200 && primary.body?.booking
+      ? primary.body.booking
+      : {
+          id: row.booking_id,
+          bookingDisplayNumber: payload.trip.bookingDisplayNumber,
+          status: payload.trip.status,
+          paymentStatus: payload.trip.paymentStatus,
+          confirmationNumber: payload.trip.confirmationNumber,
+          startDate: payload.trip.startDate,
+          endDate: payload.trip.endDate,
+          createdAt: payload.trip.createdAt,
+          updatedAt: payload.trip.updatedAt,
+          route: {},
+        };
     const optional = async (path: string) => {
       try {
-        const result = await fetchServerJSON(env, path, token);
+        const result = await fetchServerJSON(env, path, credential);
         return result.status === 200 ? result.body : null;
       } catch { return null; }
     };
-    const makkahHotelID = clean(primary.body.booking?.hotelSelection?.hotelId, 128);
-    const madinahHotelID = clean(primary.body.booking?.madinahHotelSelection?.hotelId, 128);
+    const makkahHotelID = clean(booking?.hotelSelection?.hotelId, 128);
+    const madinahHotelID = clean(booking?.madinahHotelSelection?.hotelId, 128);
     const [checkout, itinerary, security, makkahHotel, madinahHotel] = await Promise.all([
       optional(`/api/catalog/hotels/client/trips/${encodeURIComponent(row.booking_id)}/checkout`),
       optional(`/api/catalog/hotels/client/trips/${encodeURIComponent(row.booking_id)}/itinerary`),
@@ -1704,7 +1741,7 @@ async function miniBookingBundle(env: Env, row: LinkedBookingRow): Promise<any |
     ]);
     return {
       reference: bookingReference(payload.trip),
-      booking: primary.body.booking,
+      booking,
       trip: payload.trip,
       lifecycle: lifecycle(payload),
       guide: (payload as any).assignment?.guide ?? null,
@@ -1725,12 +1762,8 @@ async function miniBootstrap(request: Request, env: Env): Promise<Response> {
   const user = await validateTelegramInitData(env, clean(body.initData, 8192));
   if (!user) return json({ error: "TELEGRAM_AUTH_FAILED" }, 401);
   const rows = await linkedRowsForUser(env, user.id);
+  if (!rows.length) return json({ error: "BOOKING_NOT_LINKED" }, 404);
   const locale = normalizeLocale(rows[0]?.language || user.language_code || "ru");
-  // Opening the Mini App must never collapse into a raw API error when the
-  // Telegram account has not linked a booking yet. Return an authenticated
-  // empty shell so Booking / Care / Help remain usable and the UI can offer
-  // the canonical connect-booking flow.
-  if (!rows.length) return json({ ok: true, locale, bookings: [], careProfile: null, emptyReason: "BOOKING_NOT_LINKED" });
   const bundles: any[] = [];
   for (const row of rows.slice(0, 10)) {
     const bundle = await miniBookingBundle(env, row);
@@ -1973,7 +2006,7 @@ async function miniCarePhoto(request: Request, env: Env): Promise<Response> {
   const bytes = decodeBase64Payload(raw);
   if (!bytes || bytes.byteLength < 16 || bytes.byteLength > 7_500_000) return json({ error: "INVALID_IMAGE" }, 400);
   if (!env.IUMRAH_WEB || typeof env.IUMRAH_WEB.fetch !== "function") return json({ error: "IUMRAH_WEB_BINDING_MISSING" }, 503);
-  const headers = new Headers({ accept: "application/json", "content-type": "image/jpeg", "x-booking-token": context.token });
+  const headers = bookingCredentialHeaders(context.token, { accept: "application/json", "content-type": "image/jpeg" });
   const response = await env.IUMRAH_WEB.fetch(new Request(
     `https://iumrah-web.internal/api/catalog/hotels/client/chats/${encodeURIComponent(bookingID)}/attachments`,
     { method: "POST", headers, body: bytes, redirect: "manual" },
@@ -2003,7 +2036,7 @@ async function miniCareAttachment(request: Request, env: Env): Promise<Response>
   if (!env.IUMRAH_WEB || typeof env.IUMRAH_WEB.fetch !== "function") return json({ error: "IUMRAH_WEB_BINDING_MISSING" }, 503);
   const response = await env.IUMRAH_WEB.fetch(new Request(`https://iumrah-web.internal${path}`, {
     method: "GET",
-    headers: { accept: "image/*", "x-booking-token": context.token },
+    headers: bookingCredentialHeaders(context.token, { accept: "image/*" }),
     redirect: "manual",
   }));
   if (!response.ok) return json({ error: `CARE_ATTACHMENT_${response.status}` }, response.status || 502);
@@ -2048,7 +2081,7 @@ export default {
     } catch { /* The health endpoint can still respond before a first migration in local development. */ }
 
     if (request.method === "GET" && url.pathname === "/health") {
-      return json({ ok: true, service: "iumrah-telegram-bot", version: "1.7.8", apiOrigin: serverOrigin(env), directServer: true, packageBinding: Boolean(env.IUMRAH_PACKAGE_API), iumrahWebReadFallback: Boolean(env.IUMRAH_WEB) });
+      return json({ ok: true, service: "iumrah-telegram-bot", version: "1.7.7", apiOrigin: serverOrigin(env), directServer: true, packageBinding: Boolean(env.IUMRAH_PACKAGE_API), iumrahWebReadFallback: Boolean(env.IUMRAH_WEB) });
     }
     if (request.method === "GET" && /^\/status-image\/[a-z_]+\.webp$/.test(url.pathname)) {
       const key = url.pathname.split("/").pop()?.replace(/\.webp$/, "") || "";
