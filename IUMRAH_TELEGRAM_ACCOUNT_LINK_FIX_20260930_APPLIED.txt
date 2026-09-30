@@ -1,0 +1,6 @@
+IUMRAH TELEGRAM ACCOUNT LINK FIX — 2026-09-30
+
+Fixes Connect Telegram for bookings restored from iumrah Account after reinstall/TestFlight update.
+The bot link endpoint now accepts either a booking token or an authenticated account token forwarded by PackageEngine.
+Credentials are encrypted at rest using the existing encryption key, tagged internally as booking/account credentials, and the correct Authorization header is used for future status reads.
+Legacy Telegram-linked bookings remain compatible. No D1 migration is required.

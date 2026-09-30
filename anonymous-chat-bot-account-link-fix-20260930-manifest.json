@@ -1,0 +1,7 @@
+{
+  "name": "anonymous-chat-bot-account-link-fix",
+  "date": "2026-09-30",
+  "migration_required": false,
+  "backward_compatible": true,
+  "fixes": ["account-token booking links", "restored booking Telegram connection", "credential-aware status and mini-app reads"]
+}
