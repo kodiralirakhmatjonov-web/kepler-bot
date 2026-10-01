@@ -1236,6 +1236,35 @@ async function createLinkToken(request: Request, env: Env): Promise<Response> {
   return json({ ok: true, booking: { bookingID, bookingDisplayNumber: null }, startParameter, linkUrl, expiresAt });
 }
 
+async function bookingLinkStatus(request: Request, env: Env): Promise<Response> {
+  let body: Record<string, unknown>;
+  try { body = (await request.json()) as Record<string, unknown>; } catch { return json({ error: "INVALID_REQUEST" }, 400); }
+  const bookingID = clean(body.bookingId ?? body.bookingID, 64);
+  const bookingToken = clean(body.bookingToken ?? body.accessToken, 512);
+  const accountToken = clean(body.accountToken, 512);
+  if (!validBookingID(bookingID)) return json({ error: "INVALID_BOOKING" }, 400);
+
+  const credential: StoredBookingCredential | null = bookingToken.length >= 24
+    ? { kind: "booking", token: bookingToken }
+    : accountToken.length >= 24
+      ? { kind: "account", token: accountToken }
+      : null;
+  if (!credential) return json({ error: "BOOKING_AUTH_INVALID" }, 401);
+
+  try {
+    await fetchTrip(env, bookingID, encodeStoredBookingCredential(credential.kind, credential.token));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "BOOKING_AUTH_INVALID";
+    if (message === "BOOKING_NOT_FOUND") return json({ error: message }, 404);
+    return json({ error: "BOOKING_AUTH_INVALID" }, 401);
+  }
+
+  const row = await env.DB.prepare(
+    `SELECT COUNT(*) AS count FROM telegram_bookings WHERE booking_id=?1 AND notifications_enabled=1`,
+  ).bind(bookingID).first<{ count: number }>();
+  return json({ ok: true, bookingId: bookingID, linked: Number(row?.count ?? 0) > 0 });
+}
+
 async function claimLinkToken(env: Env, message: TelegramMessage, user: TelegramUser, rawToken: string, runtimeBaseURL?: string): Promise<boolean> {
   if (!/^[A-Za-z0-9_-]{32,60}$/.test(rawToken)) return false;
   const hash = await sha256Hex(rawToken);
@@ -2113,6 +2142,7 @@ export default {
     if (request.method === "POST" && url.pathname === "/mini/care/call") return miniCareCall(request, env);
     if (request.method === "POST" && url.pathname === "/mini/snapshot") return miniSnapshot(request, env);
     if (request.method === "POST" && url.pathname === "/internal/link-token") return createLinkToken(request, env);
+    if (request.method === "POST" && url.pathname === "/internal/link-status") return bookingLinkStatus(request, env);
     if (request.method === "POST" && url.pathname === "/internal/booking-event") return bookingEvent(request, env);
 
     if (request.method !== "POST" || url.pathname !== "/webhook") return new Response("Not found", { status: 404 });

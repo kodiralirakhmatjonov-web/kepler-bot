@@ -1,0 +1,5 @@
+Iumrah Telegram bot linked-state endpoint — 2026-10-01
+
+Cumulative bot source: keeps the previous booking/account credential bridge and adds POST /internal/link-status.
+The endpoint validates the supplied booking/account credential against the canonical iumrah booking API and reports whether the booking already has Telegram notifications enabled.
+No D1 migration is required.

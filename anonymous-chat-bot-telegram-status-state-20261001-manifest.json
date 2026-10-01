@@ -1,0 +1,14 @@
+{
+  "schema": "iumrah.patch.v1",
+  "name": "telegram-status-state",
+  "date": "2026-10-01",
+  "target": "anonymous-chat-bot",
+  "files": [
+    "src/index.ts",
+    "IUMRAH_TELEGRAM_STATUS_STATE_20261001_APPLIED.txt"
+  ],
+  "notes": [
+    "No D1 migration required.",
+    "src/index.ts is cumulative and retains the prior booking/account credential bridge."
+  ]
+}
